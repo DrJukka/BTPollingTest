@@ -29,6 +29,7 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
 
     BluetoothBase mBluetoothBase = null;
     BTConnectToThread mBTConnectToThread = null;
+    BTListenerThread mBTListenerThread = null;
 
     IntentFilter mfilter = null;
     BroadcastReceiver mReceiver = null;
@@ -47,59 +48,49 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
     long startQueryTimeStamp = 0;
     long waitTimeStartStamp = 0;
 
+    long lastSaveTimeStamp = 0;
+
     List<Long> timeStampList = new ArrayList<Long>();
 
+     public void DoSaveDebugDataNow() {
 
-    // 20 minute timer
-    CountDownTimer SaveDataTimeOutTimer = new CountDownTimer(1200000, 1000) {
-        public void onTick(long millisUntilFinished) {
-            // not using
-        }
-        public void onFinish() {
+         long shortest = -1;
+         long longest = -1;
+         long average = -1;
+         int count = timeStampList.size();
+         if (count > 0) {
+             shortest = timeStampList.get(0);
+             longest = timeStampList.get(0);
+             average = timeStampList.get(0);
 
-            long shortest = - 1;
-            long longest = - 1;
-            long average = - 1;
-            int count = timeStampList.size();
-            if(count > 0) {
-                shortest = timeStampList.get(0);
-                longest = timeStampList.get(0);
-                average = timeStampList.get(0);
+             for (int i = 1; i < count; i++) {
+                 average = average + timeStampList.get(i);
 
-                for (int i = 1; i < count; i++) {
-                    average = average + timeStampList.get(i);
+                 if (shortest > timeStampList.get(i)) {
+                     shortest = timeStampList.get(i);
+                 }
+                 if (longest < timeStampList.get(i)) {
+                     longest = timeStampList.get(i);
+                 }
+             }
 
-                    if (shortest > timeStampList.get(i)) {
-                        shortest = timeStampList.get(i);
-                    }
-                    if (longest < timeStampList.get(i)) {
-                        longest = timeStampList.get(i);
-                    }
-                }
+             average = (average / count);
+         }
 
-                average = (average / count);
-            }
+         if (mTestDataFile != null) {
+             mTestDataFile.WriteDebugline(lastChargePercent, fullRoundCount, socketConnecToFailCount, socketCreateFailCount, socketConnectedCount, socketListenFailCount, socketConnectionCount, handShakeOkCount, handShakeFailedCount, shortest, longest, average);
+         }
+         timeStampList.clear();
+     }
 
-            if (mTestDataFile != null) {
-                mTestDataFile.WriteDebugline(lastChargePercent,fullRoundCount,socketConnecToFailCount,socketCreateFailCount,socketConnectedCount,socketListenFailCount,socketConnectionCount,handShakeOkCount,handShakeFailedCount,shortest, longest, average );
-            }
-            timeStampList.clear();
 
-            SaveDataTimeOutTimer.start();
-        }
-    };
 
     final CountDownTimer PollingTimer = new CountDownTimer(1000, 500) {
         public void onTick(long millisUntilFinished) {
             // not using
         }
         public void onFinish() {
-          //  PollingTimer.start();
-
-          //  long NowTimeStamp = System.currentTimeMillis();
-          //  if((NowTimeStamp - waitTimeStartStamp) > 60000) {
-                DoOneRound();
-          //  }
+            DoOneRound();
         }
     };
 
@@ -121,8 +112,6 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
 
     private final IBinder mBinder = new MyLocalBinder();
 
-
-
     public class MyLocalBinder extends Binder {
         BtPollingService getService() {
             return BtPollingService.this;
@@ -142,7 +131,6 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
     public void onDestroy() {
         print_line("SearchService", "onDestroy");
         super.onDestroy();
-
     }
 
     boolean isRunnuing(){
@@ -156,7 +144,7 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
     public void Start() {
 
         mTestDataFile = new TestDataFile(this);
-        SaveDataTimeOutTimer.start();
+        //SaveDataTimeOutTimer.start();
 
         mfilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
         mReceiver = new PowerConnectionReceiver();
@@ -191,9 +179,6 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
             mBluetoothBase.Stop();
             mBluetoothBase = null;
         }
-
-        SaveDataTimeOutTimer.cancel();
-
         if(mTestDataFile != null) {
             print_line("SearchService","Closing File");
             mTestDataFile.CloseFile();
@@ -204,6 +189,11 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
     public void stopAll(){
         PollingTimer.cancel();
 
+        if (mBTListenerThread != null) {
+            mBTListenerThread.Stop();
+            mBTListenerThread = null;
+        }
+
         if (mBTConnectToThread != null) {
             mBTConnectToThread.Stop();
             mBTConnectToThread = null;
@@ -211,11 +201,23 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
     }
 
     public void startAll(){
-     //   PollingTimer.start();
+        stopAll();
+
+        if (mBluetoothBase != null) {
+            mBTListenerThread = new BTListenerThread(this,mBluetoothBase.getAdapter());
+            mBTListenerThread.start();
+        }
+        lastSaveTimeStamp  = System.currentTimeMillis();
         DoOneRound();
     }
 
     public void DoOneRound(){
+
+        long nowtimme = System.currentTimeMillis();
+        if((nowtimme - lastSaveTimeStamp) > 600000){
+            lastSaveTimeStamp = System.currentTimeMillis();
+            DoSaveDebugDataNow();
+        }
 
         if (mBTConnectToThread != null) {
             mBTConnectToThread.Stop();
@@ -233,23 +235,25 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
         mBTConnectToThread.start();
     }
 
-
     @Override
     public void CreateSocketFailed(String reason) {
         socketCreateFailCount = socketCreateFailCount + 1;
     }
 
-
     @Override
     public void ConnectionFailed(String reason) {
+
         socketConnecToFailCount = socketConnecToFailCount + 1;
 
         long QueryTime = (System.currentTimeMillis() - startQueryTimeStamp);
         timeStampList.add(QueryTime);
+        if(QueryTime < 3000){
+            PollingTimer.start();
+        }else{
+            DoOneRound();
+        }
 
-        print_line("CON","failed with readon : " +reason );
-
-        PollingTimer.start();
+        print_line("CON","Count : " + socketConnecToFailCount +  "failed with reason : " +reason );
     }
 
     @Override
@@ -260,6 +264,15 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
     @Override
     public void ListeningFailed(String reason) {
         socketListenFailCount = socketListenFailCount + 1;
+
+        if (mBTListenerThread != null) {
+            mBTListenerThread.Stop();
+            mBTListenerThread = null;
+        }
+        if (mBluetoothBase != null) {
+            mBTListenerThread = new BTListenerThread(this,mBluetoothBase.getAdapter());
+            mBTListenerThread.start();
+        }
     }
 
 
@@ -277,16 +290,6 @@ public class BtPollingService extends Service implements BluetoothBase.Bluetooth
                 || state == BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
             startAll();
         }
-    }
-
-    @Override
-    public void HandShakeOk(BluetoothSocket socket, boolean incoming) {
-        handShakeOkCount = handShakeOkCount + 1;
-    }
-
-    @Override
-    public void HandShakeFailed(String reason, boolean incoming) {
-        handShakeFailedCount = handShakeFailedCount + 1;
     }
 
     public void print_line(String who, String line) {

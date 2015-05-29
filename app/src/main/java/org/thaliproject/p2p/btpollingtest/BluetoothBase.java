@@ -22,8 +22,6 @@ public class BluetoothBase {
         void ConnectionFailed(String reason);
         void ListeningFailed(String reason);
         void BluetoothStateChanged(int state);
-        void HandShakeOk(BluetoothSocket socket, boolean incoming);
-        void HandShakeFailed(String reason, boolean incoming);
     }
 
     private BluetoothStatusChanged callBack = null;
